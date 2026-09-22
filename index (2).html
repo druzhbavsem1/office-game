@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Игра с коллегами</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- PeerJS: соединяет браузеры напрямую (WebRTC), сервер не нужен -->
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --paper: #EEF3F8;
+    --grid: #D3DEEA;
+    --ink: #1F3A93;
+    --ink-soft: #5A6E9C;
+    --card: #FFFFFF;
+    --warn: #C0392B;
+    --ok: #1E8449;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #121A2E; --grid: #1F2A44; --ink: #9DB4F5; --ink-soft: #7185B5; --card: #1A2440;
+      --warn: #F1948A; --ok: #7DCEA0;
+    }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html { height: 100%; }
+  body {
+    margin: 0; min-height: 100%;
+    font-family: "Rubik", system-ui, sans-serif;
+    color: var(--ink);
+    background-color: var(--paper);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px; }
+  h1 {
+    font-family: "Unbounded", "Rubik", sans-serif; font-weight: 800;
+    font-size: clamp(2rem, 6vw, 3.4rem); line-height: 1.05; margin: 0 0 8px;
+    letter-spacing: -0.02em;
+  }
+  .lead { color: var(--ink-soft); margin: 0 0 32px; max-width: 60ch; line-height: 1.5; }
+  .panel {
+    background: var(--card); border: 2px solid var(--ink); border-radius: 14px;
+    padding: 20px; box-shadow: 5px 5px 0 var(--ink);
+  }
+  label { display: block; font-weight: 500; margin-bottom: 6px; }
+  input {
+    font: inherit; font-size: 1.05rem; width: 100%; padding: 10px 12px;
+    border: 2px solid var(--ink); border-radius: 8px; background: var(--paper); color: var(--ink);
+  }
+  #codeInput { text-transform: uppercase; letter-spacing: 0.2em; font-weight: 600; }
+  button {
+    font: inherit; font-weight: 600; font-size: 1rem; cursor: pointer;
+    padding: 11px 18px; border-radius: 8px; border: 2px solid var(--ink);
+    background: var(--ink); color: var(--card);
+  }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:active { transform: translate(1px, 1px); }
+  button:focus-visible, input:focus-visible { outline: 3px solid #F5B041; outline-offset: 2px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .row > .grow { flex: 1 1 180px; }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+  @media (max-width: 640px) { .choices { grid-template-columns: 1fr; } }
+  .choices h2 { font-size: 1.15rem; margin: 0 0 12px; }
+  .msg { min-height: 1.4em; margin-top: 14px; font-weight: 500; }
+  .msg.err { color: var(--warn); }
+  .msg.ok { color: var(--ok); }
+  .hidden { display: none !important; }
+
+  /* Экран игры */
+  .topbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .room-code {
+    font-family: "Unbounded", sans-serif; font-size: 1.6rem; letter-spacing: 0.15em;
+    background: var(--card); border: 2px solid var(--ink); border-radius: 8px; padding: 4px 14px;
+  }
+  .game-layout { display: grid; grid-template-columns: 1fr 220px; gap: 20px; }
+  @media (max-width: 760px) { .game-layout { grid-template-columns: 1fr; } }
+  canvas {
+    width: 100%; height: auto; display: block; border-radius: 10px;
+    border: 2px solid var(--ink); background: var(--card); touch-action: none;
+  }
+  #players { list-style: none; padding: 0; margin: 0; }
+  #players li { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  #players .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+  #players .score { margin-left: auto; font-weight: 600; }
+  .hint { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.45; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ЛОББИ -->
+  <section id="lobby">
+    <h1>Игра с коллегами</h1>
+    <p class="lead">Один человек создаёт комнату и отправляет остальным код или ссылку. Серверов нет: браузеры соединяются друг с другом напрямую.</p>
+
+    <div class="panel">
+      <label for="nameInput">Ваше имя</label>
+      <input id="nameInput" maxlength="16" placeholder="Например, Лена из бухгалтерии">
+
+      <div class="choices">
+        <div>
+          <h2>Создать новую игру</h2>
+          <button id="hostBtn">Создать комнату</button>
+        </div>
+        <div>
+          <h2>Присоединиться</h2>
+          <div class="row">
+            <div class="grow"><input id="codeInput" maxlength="5" placeholder="КОД" aria-label="Код комнаты"></div>
+            <button id="joinBtn" class="ghost">Войти</button>
+          </div>
+        </div>
+      </div>
+      <div id="lobbyMsg" class="msg" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ИГРА -->
+  <section id="game" class="hidden">
+    <div class="topbar">
+      <span>Комната</span>
+      <span id="roomCode" class="room-code">-----</span>
+      <button id="copyBtn" class="ghost">Скопировать ссылку</button>
+      <span id="gameMsg" class="msg" role="status"></span>
+    </div>
+    <div class="game-layout">
+      <canvas id="canvas" width="800" height="500"></canvas>
+      <div class="panel">
+        <strong>Игроки</strong>
+        <ul id="players"></ul>
+        <p class="hint">Двигайтесь стрелками или WASD, на телефоне касайтесь поля. Собирайте жёлтые монетки.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+/* =========================================================
+   НАСТРОЙКИ
+   ========================================================= */
+const ID_PREFIX = "office-game-7f3a-";   // смените на что-то своё, чтобы не пересекаться с чужими играми
+const WORLD = { w: 800, h: 500 };
+const SPEED = 220;                       // пикселей в секунду
+const RADIUS = 18;
+const BROADCAST_MS = 50;                 // хост рассылает состояние 20 раз в секунду
+const COLORS = ["#E74C3C", "#3498DB", "#27AE60", "#8E44AD", "#E67E22", "#16A085", "#D35400", "#2C3E50"];
+
+/* =========================================================
+   СЕТЕВАЯ ЧАСТЬ (обычно менять не нужно)
+   Схема: хост хранит состояние и считает логику,
+   клиенты шлют хосту нажатия и получают готовое состояние.
+   ========================================================= */
+let peer = null;
+let isHost = false;
+let myId = null;
+let hostConn = null;            // у клиента: соединение с хостом
+const clients = new Map();      // у хоста: id игрока -> соединение
+let state = null;               // текущее состояние игры (у хоста — истинное, у клиента — копия)
+
+const $ = (id) => document.getElementById(id);
+
+function randomCode() {
+  const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 5 }, () => abc[Math.floor(Math.random() * abc.length)]).join("");
+}
+
+function playerName() {
+  return ($("nameInput").value.trim() || "Игрок").slice(0, 16);
+}
+
+function setMsg(el, text, kind = "") {
+  el.textContent = text;
+  el.className = "msg " + kind;
+}
+
+// --- Хост ---
+function startHost(attempt = 0) {
+  const code = randomCode();
+  setMsg($("lobbyMsg"), "Создаю комнату…");
+  peer = new Peer(ID_PREFIX + code);
+
+  peer.on("open", () => {
+    isHost = true;
+    myId = "host";
+    state = createInitialState();
+    addPlayer(myId, playerName());
+    enterGame(code);
+    setInterval(broadcastState, BROADCAST_MS);
+  });
+
+  peer.on("connection", (conn) => {
+    conn.on("data", (msg) => handleClientMessage(conn, msg));
+    conn.on("close", () => {
+      clients.delete(conn.peer);
+      removePlayer(conn.peer);
+    });
+  });
+
+  peer.on("error", (err) => {
+    if (err.type === "unavailable-id" && attempt < 3) {
+      peer.destroy();
+      startHost(attempt + 1);           // такой код уже занят — пробуем другой
+    } else {
+      setMsg($("lobbyMsg"), "Не удалось создать комнату: " + err.type, "err");
+    }
+  });
+}
+
+function handleClientMessage(conn, msg) {
+  if (msg.t === "join") {
+    clients.set(conn.peer, conn);
+    addPlayer(conn.peer, String(msg.name).slice(0, 16));
+    conn.send({ t: "welcome", id: conn.peer });
+  } else if (msg.t === "input") {
+    const p = state.players[conn.peer];
+    if (p) p.input = msg.input;
+  }
+}
+
+function broadcastState() {
+  const snapshot = { t: "state", state: publicState() };
+  for (const conn of clients.values()) {
+    if (conn.open) conn.send(snapshot);
+  }
+}
+
+// --- Клиент ---
+function joinRoom(code) {
+  code = code.trim().toUpperCase();
+  if (code.length !== 5) {
+    setMsg($("lobbyMsg"), "Код комнаты состоит из 5 символов.", "err");
+    return;
+  }
+  setMsg($("lobbyMsg"), "Подключаюсь…");
+  peer = new Peer();
+
+  peer.on("open", () => {
+    hostConn = peer.connect(ID_PREFIX + code, { reliable: true });
+
+    hostConn.on("open", () => {
+      hostConn.send({ t: "join", name: playerName() });
+    });
+
+    hostConn.on("data", (msg) => {
+      if (msg.t === "welcome") {
+        myId = msg.id;
+        enterGame(code);
+      } else if (msg.t === "state") {
+        state = msg.state;
+      }
+    });
+
+    hostConn.on("close", () => {
+      setMsg($("gameMsg"), "Хост закрыл игру. Обновите страницу, чтобы начать заново.", "err");
+    });
+  });
+
+  peer.on("error", (err) => {
+    const text = err.type === "peer-unavailable"
+      ? "Комната с таким кодом не найдена. Проверьте код."
+      : "Ошибка соединения: " + err.type;
+    setMsg($("lobbyMsg"), text, "err");
+  });
+}
+
+function sendInput(input) {
+  if (isHost) {
+    if (state.players[myId]) state.players[myId].input = input;
+  } else if (hostConn && hostConn.open) {
+    hostConn.send({ t: "input", input });
+  }
+}
+
+/* =========================================================
+   ИГРОВАЯ ЛОГИКА — меняйте этот блок под свою игру.
+   Выполняется только у хоста.
+   ========================================================= */
+function createInitialState() {
+  return { players: {}, coin: randomCoin() };
+}
+
+function randomCoin() {
+  return { x: 40 + Math.random() * (WORLD.w - 80), y: 40 + Math.random() * (WORLD.h - 80) };
+}
+
+function addPlayer(id, name) {
+  const used = Object.values(state.players).map((p) => p.color);
+  const color = COLORS.find((c) => !used.includes(c)) || COLORS[0];
+  state.players[id] = {
+    name, color, score: 0,
+    x: 60 + Math.random() * (WORLD.w - 120),
+    y: 60 + Math.random() * (WORLD.h - 120),
+    input: { x: 0, y: 0 },
+  };
+}
+
+function removePlayer(id) {
+  delete state.players[id];
+}
+
+function update(dt) {
+  for (const p of Object.values(state.players)) {
+    let { x: dx, y: dy } = p.input;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    p.x = Math.max(RADIUS, Math.min(WORLD.w - RADIUS, p.x + dx * SPEED * dt));
+    p.y = Math.max(RADIUS, Math.min(WORLD.h - RADIUS, p.y + dy * SPEED * dt));
+
+    if (Math.hypot(p.x - state.coin.x, p.y - state.coin.y) < RADIUS + 12) {
+      p.score += 1;
+      state.coin = randomCoin();
+    }
+  }
+}
+
+// Что отправлять клиентам (без служебных полей)
+function publicState() {
+  const players = {};
+  for (const [id, p] of Object.entries(state.players)) {
+    players[id] = { name: p.name, color: p.color, score: p.score, x: p.x, y: p.y };
+  }
+  return { players, coin: state.coin };
+}
+
+/* =========================================================
+   ОТРИСОВКА И УПРАВЛЕНИЕ (выполняется у всех)
+   ========================================================= */
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+
+function draw() {
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue("--card");
+  ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+
+  ctx.strokeStyle = css.getPropertyValue("--grid");
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= WORLD.w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke(); }
+  for (let y = 0; y <= WORLD.h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke(); }
+
+  if (!state) return;
+
+  ctx.fillStyle = "#F5B041";
+  ctx.beginPath(); ctx.arc(state.coin.x, state.coin.y, 12, 0, Math.PI * 2); ctx.fill();
+
+  ctx.font = "600 14px Rubik, sans-serif";
+  ctx.textAlign = "center";
+  for (const [id, p] of Object.entries(state.players)) {
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, RADIUS, 0, Math.PI * 2); ctx.fill();
+    if (id === myId) {
+      ctx.strokeStyle = css.getPropertyValue("--ink"); ctx.lineWidth = 3; ctx.stroke();
+    }
+    ctx.fillStyle = css.getPropertyValue("--ink");
+    ctx.fillText(p.name, p.x, p.y - RADIUS - 8);
+  }
+}
+
+function renderPlayerList() {
+  if (!state) return;
+  const list = Object.entries(state.players).sort((a, b) => b[1].score - a[1].score);
+  $("players").innerHTML = "";
+  for (const [id, p] of list) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="dot" style="background:${p.color}"></span><span></span><span class="score">${p.score}</span>`;
+    li.children[1].textContent = p.name + (id === myId ? " (вы)" : "");
+    $("players").appendChild(li);
+  }
+}
+
+// Клавиатура
+const keys = {};
+function keyboardInput() {
+  const x = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
+  const y = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+  return { x, y };
+}
+let lastInput = "";
+function pushInput(input) {
+  const s = JSON.stringify(input);
+  if (s !== lastInput) { lastInput = s; sendInput(input); }   // шлём только изменения
+}
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  keys[e.code] = true;
+  if (e.code.startsWith("Arrow")) e.preventDefault();
+  pushInput(keyboardInput());
+});
+window.addEventListener("keyup", (e) => { keys[e.code] = false; pushInput(keyboardInput()); });
+
+// Касание: двигаемся к точке касания
+let touching = false;
+function touchInput(e) {
+  if (!state || !state.players[myId]) return;
+  const r = canvas.getBoundingClientRect();
+  const tx = (e.clientX - r.left) * (WORLD.w / r.width);
+  const ty = (e.clientY - r.top) * (WORLD.h / r.height);
+  const me = state.players[myId];
+  const dx = tx - me.x, dy = ty - me.y, len = Math.hypot(dx, dy);
+  pushInput(len < 10 ? { x: 0, y: 0 } : { x: dx / len, y: dy / len });
+}
+canvas.addEventListener("pointerdown", (e) => { touching = true; touchInput(e); });
+canvas.addEventListener("pointermove", (e) => { if (touching) touchInput(e); });
+window.addEventListener("pointerup", () => { if (touching) { touching = false; pushInput({ x: 0, y: 0 }); } });
+
+// Главный цикл
+let last = performance.now();
+let listTimer = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (isHost && state) update(dt);
+  if (touching && state) { /* направление пересчитывается в pointermove */ }
+  draw();
+  listTimer += dt;
+  if (listTimer > 0.25) { listTimer = 0; renderPlayerList(); }
+  requestAnimationFrame(loop);
+}
+
+/* =========================================================
+   ИНТЕРФЕЙС ЛОББИ
+   ========================================================= */
+function enterGame(code) {
+  $("lobby").classList.add("hidden");
+  $("game").classList.remove("hidden");
+  $("roomCode").textContent = code;
+  history.replaceState(null, "", "?room=" + code);
+  requestAnimationFrame(loop);
+}
+
+$("hostBtn").onclick = () => startHost();
+$("joinBtn").onclick = () => joinRoom($("codeInput").value);
+$("codeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoom(e.target.value); });
+
+$("copyBtn").onclick = async () => {
+  const url = location.origin + location.pathname + "?room=" + $("roomCode").textContent;
+  try {
+    await navigator.clipboard.writeText(url);
+    setMsg($("gameMsg"), "Ссылка скопирована", "ok");
+  } catch {
+    setMsg($("gameMsg"), url);
+  }
+};
+
+// Если открыли по ссылке-приглашению — подставляем код
+const roomFromUrl = new URLSearchParams(location.search).get("room");
+if (roomFromUrl) {
+  $("codeInput").value = roomFromUrl.toUpperCase();
+  $("nameInput").focus();
+  setMsg($("lobbyMsg"), "Введите имя и нажмите «Войти».");
+}
+
+if (typeof Peer === "undefined") {
+  setMsg($("lobbyMsg"), "Не загрузилась библиотека PeerJS. Проверьте интернет или блокировщик.", "err");
+}
+</script>
+</body>
+</html>
